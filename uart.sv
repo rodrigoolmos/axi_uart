@@ -11,6 +11,7 @@ module uart #(
     output logic [7:0] data_recv,   // Data received
     input  logic ena_tx,            // Enable transmission
     output logic tx_done,           // Indicates transmission complete 1 clk cycle
+    output logic error_rx,          // Indicates receive error
     output logic new_rx             // Indicates new data received 1 clk cycle
 
 );
@@ -30,6 +31,7 @@ module uart #(
     logic [3:0] tx_bit_cnt;
     logic [3:0] rx_bit_cnt;
     logic [1:0] rx_ff; // For synchronizing rx input
+    logic [7:0] data_send_reg;
 
     logic [$clog2(CYCLES_PER_BIT):0] clk_div1;
     logic [$clog2(CYCLES_PER_BIT):0] clk_div2;
@@ -54,6 +56,7 @@ module uart #(
         if (!nrst) begin
             tx_state <= IDLE;
             tx_bit_cnt <= 0;
+            data_send_reg <= 0;
         end else if (tick_tx) begin
             case (tx_state)
                 IDLE: begin
@@ -63,6 +66,7 @@ module uart #(
                 end
                 START_BIT: begin
                     if (tick_tx) begin
+                        data_send_reg <= data_send;
                         tx_state <= DATA_BITS;
                         tx_bit_cnt <= 0;
                     end
@@ -90,7 +94,7 @@ module uart #(
     always_comb begin
         // tx handling
         if (tx_state == DATA_BITS)
-            tx = data_send[tx_bit_cnt]; // Data bits
+            tx = data_send_reg[tx_bit_cnt]; // Data bits
         else if (tx_state == STOP_BIT)
             tx = 1'b1; // Stop bit
         else if (tx_state == START_BIT)
@@ -129,6 +133,7 @@ module uart #(
             data_recv <= 8'b0;
             rx_bit_cnt <= 0;
             new_rx <= 0;
+            error_rx <= 0;
         end else begin
             case (rx_state)
                 IDLE: begin
@@ -156,7 +161,8 @@ module uart #(
                 STOP_BIT: begin
                     if (clk_div2 == SAMPLE_BIT) begin
                         rx_state <= IDLE;
-                        new_rx <= 1;
+                        new_rx <= rx_ff[1];
+                        error_rx <= ~rx_ff[1];
                     end
                 end
             endcase
