@@ -1,21 +1,38 @@
+`include "agent_uart.sv"
+
+
 module tb_uart;
+
+    timeunit      1ns;
+    timeprecision 1ps;
 
     // Parameters
     parameter CLK_FREQ = 50_000_000;
     parameter BAUD_RATE = 115200;
     parameter CYCLES_PER_BIT = CLK_FREQ / BAUD_RATE;
+    parameter NUM_ITERATIONS = 100;
 
     // Signals
     logic clk;
     logic nrst;
-    logic rx;
-    logic tx;
 
     logic [7:0] data_send;
     logic [7:0] data_recv;
     logic ena_tx;
     logic tx_done;
     logic new_rx;
+
+    logic [7:0] sending_data_tx[$];
+    logic [7:0] sending_data_rx[$];
+    logic [7:0] receiving_data_rx[$];
+
+    // Instantiate UART interface
+    uart_if #(
+        .BAUD_RATE(BAUD_RATE)
+    ) uart_if_inst ();
+
+    // Agente
+    uart_agent uart_ag;
 
     // Instantiate UART module
     uart #(
@@ -24,8 +41,8 @@ module tb_uart;
     ) uut (
         .clk(clk),
         .nrst(nrst),
-        .rx(rx),
-        .tx(tx),
+        .rx(uart_if_inst.rx),
+        .tx(uart_if_inst.tx),
         .data_send(data_send),
         .data_recv(data_recv),
         .ena_tx(ena_tx),
@@ -33,27 +50,80 @@ module tb_uart;
         .new_rx(new_rx)
     );
 
-    task generate_rx(input [7:0] data);
-        integer i;
-        begin
-            // Start bit
-            rx = 1'b0;
-            repeat (CYCLES_PER_BIT) @(posedge clk);
-            #1;
-
-            // Data bits
-            for (i = 0; i < 8; i = i + 1) begin
-                rx = data[i];
-                repeat (CYCLES_PER_BIT) @(posedge clk);
-                #1;
-            end
-
-            // Stop bit
-            rx = 1'b1;
-            repeat (CYCLES_PER_BIT) @(posedge clk);
-            #1;
+    // Task send byte via tx line
+    task automatic generate_tx(input logic [7:0] data);
+        data_send = data;
+        if (uart_ag != null) begin
+            uart_ag.expect_tx_byte(data);
         end
-        
+        ena_tx = 1;
+        @ (posedge clk iff tx_done);
+        ena_tx = 0;
+    endtask
+
+    task automatic store_received_byte_rx();
+        logic [7:0] expected;
+        @ (posedge clk iff new_rx);
+        receiving_data_rx.push_back(data_recv);
+
+        if (sending_data_rx.size() == 0) begin
+            $error("RX received unexpected byte 0x%0h (queue empty)", data_recv);
+        end else begin
+            expected = sending_data_rx.pop_front();
+            if (expected !== data_recv) begin
+                $error("RX Data mismatch: expected 0x%0h, received 0x%0h", expected, data_recv);
+            end
+        end
+    endtask
+
+    logic [7:0] b = 0;
+    bit stop_listen;
+    task start_listening();
+        stop_listen = 0;
+        fork
+            forever begin
+                if (stop_listen) break;
+                store_received_byte_rx();
+            end
+        join_none
+    endtask
+
+    task stop_listening();
+        stop_listen = 1;
+    endtask
+
+    task automatic check_integrity();
+        if (sending_data_rx.size() != 0) begin
+            $error("RX Scoreboard pending %0d expected bytes", sending_data_rx.size());
+        end
+    endtask
+
+    task automatic init();
+        nrst = 0;
+        uart_ag = new(uart_if_inst);
+        ena_tx = 0;
+        data_send = 8'h00;
+        uart_if_inst.rx = 1'b1; // Idle state
+        @ (posedge clk);
+        nrst = 1;
+    endtask
+
+    task send_some_bytes(input int num_bytes);
+        logic [7:0] b;
+        for (int i=0; i<num_bytes; ++i) begin
+            b = $urandom_range(0, 255);
+            generate_tx(b);
+            sending_data_tx.push_back(b);
+        end
+    endtask
+
+    task automatic recive_some_bytes(input int num_bytes);
+        logic [7:0] b;
+        for (int i=0; i<num_bytes; ++i) begin
+            b = $urandom_range(0, 255);
+            sending_data_rx.push_back(b);
+            uart_ag.send_byte(b);
+        end
     endtask
 
     // Clock generation
@@ -62,30 +132,44 @@ module tb_uart;
         forever #10 clk = ~clk; // 50 MHz clock
     end
 
+    int bytes_sent = 0;
+    int bytes_received = 0;
     // Test sequence
     initial begin
-        // Initialize signals
-        nrst = 0;
-        ena_tx = 0;
-        data_send = 8'h00;
-        rx = 1'b1; // Idle state
-        @ (posedge clk);
-        nrst = 1;
+        init();
+        uart_ag.start_listening();
+        start_listening();
 
-        data_send = 8'b10110100;
-        ena_tx = 1;
-        @ (posedge clk);
+        for (int i=0; i<NUM_ITERATIONS; ++i) begin
+            
+            fork
+                begin
+                    if ($urandom_range(0, 1)) begin
+                        bytes_sent = $urandom_range(0, 10);
+                        send_some_bytes(bytes_sent);
+                    end else begin
+                        repeat($urandom_range(0, 1000)) @ (posedge clk);
+                    end
+                end
+    
+                begin
+                    if ($urandom_range(0, 1)) begin
+                        bytes_received = $urandom_range(0, 10);
+                        recive_some_bytes(bytes_received);
+                    end else begin
+                        repeat($urandom_range(0, 1000)) @ (posedge clk);
+                    end
+                end
+            join
 
-        // Wait for transmission to complete
-        @ (posedge clk iff tx_done);
-        ena_tx = 0;
-        @ (posedge clk);
+        end
 
-        // Add more test cases as needed
 
-        generate_rx(8'b10110100); // Example received data
-        // Finish simulation
-        #1000;
+        uart_ag.check_integrity(sending_data_tx);
+        check_integrity();
+
+        uart_ag.stop_listening();
+        stop_listening();
         $finish;
     end
 

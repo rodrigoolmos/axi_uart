@@ -2,16 +2,16 @@ module uart #(
     parameter CLK_FREQ = 50_000_000,
     parameter BAUD_RATE = 115200
 ) (
-    input  logic clk,
-    input  logic nrst,
-    input  logic rx,
-    output logic tx,
+    input  logic clk,               // System clock
+    input  logic nrst,              // Active low reset
+    input  logic rx,                // Receive data line
+    output logic tx,                // Transmit data line
 
-    input  logic [7:0] data_send,
-    output logic [7:0] data_recv,
-    input  logic ena_tx,
-    output logic tx_done,
-    output logic new_rx
+    input  logic [7:0] data_send,   // Data to be transmitted
+    output logic [7:0] data_recv,   // Data received
+    input  logic ena_tx,            // Enable transmission
+    output logic tx_done,           // Indicates transmission complete 1 clk cycle
+    output logic new_rx             // Indicates new data received 1 clk cycle
 
 );
 
@@ -54,11 +54,9 @@ module uart #(
         if (!nrst) begin
             tx_state <= IDLE;
             tx_bit_cnt <= 0;
-            tx_done <= 0;
         end else if (tick_tx) begin
             case (tx_state)
                 IDLE: begin
-                    tx_done <= 0;
                     if (ena_tx && tick_tx) begin
                         tx_state <= START_BIT;
                     end
@@ -79,9 +77,10 @@ module uart #(
                     end
                 end
                 STOP_BIT: begin
-                    if (tick_tx) begin
+                    if (ena_tx && tick_tx) begin
+                        tx_state <= START_BIT;
+                    end else if (tick_tx) begin
                         tx_state <= IDLE;
-                        tx_done <= 1;
                     end
                 end
             endcase
@@ -89,14 +88,18 @@ module uart #(
     end
 
     always_comb begin
+        // tx handling
         if (tx_state == DATA_BITS)
-            tx <= data_send[tx_bit_cnt]; // Data bits
+            tx = data_send[tx_bit_cnt]; // Data bits
         else if (tx_state == STOP_BIT)
-            tx <= 1'b1; // Stop bit
+            tx = 1'b1; // Stop bit
         else if (tx_state == START_BIT)
-            tx <= 1'b0; // Start bit
+            tx = 1'b0; // Start bit
         else
-            tx <= 1'b1; // Idle state
+            tx = 1'b1; // Idle state
+
+        // tx_done handling
+        tx_done = (tx_state == STOP_BIT) && (clk_div1 == CYCLES_PER_BIT - 2);
     end
 
     // Receiver logic
