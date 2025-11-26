@@ -17,6 +17,7 @@ module uart #(
 
     // Calculate the number of clock cycles per bit
     localparam integer CYCLES_PER_BIT = CLK_FREQ / BAUD_RATE;
+    localparam integer SAMPLE_BIT = CYCLES_PER_BIT / 2;
 
     // Transmitter state machine
     typedef enum logic [1:0] {
@@ -52,7 +53,6 @@ module uart #(
     always_ff @(posedge clk or negedge nrst) begin
         if (!nrst) begin
             tx_state <= IDLE;
-            tx <= 1'b1; // Idle state is high
             tx_bit_cnt <= 0;
             tx_done <= 0;
         end else if (tick_tx) begin
@@ -61,7 +61,6 @@ module uart #(
                     tx_done <= 0;
                     if (ena_tx && tick_tx) begin
                         tx_state <= START_BIT;
-                        tx <= 1'b0; // Start bit
                     end
                 end
                 START_BIT: begin
@@ -72,7 +71,6 @@ module uart #(
                 end
                 DATA_BITS: begin
                     if (tick_tx) begin
-                        tx <= data_send[tx_bit_cnt];
                         if (tx_bit_cnt == 7) begin
                             tx_state <= STOP_BIT;
                         end else begin
@@ -82,13 +80,23 @@ module uart #(
                 end
                 STOP_BIT: begin
                     if (tick_tx) begin
-                        tx <= 1'b1; // Stop bit
                         tx_state <= IDLE;
                         tx_done <= 1;
                     end
                 end
             endcase
         end
+    end
+
+    always_comb begin
+        if (tx_state == DATA_BITS)
+            tx <= data_send[tx_bit_cnt]; // Data bits
+        else if (tx_state == STOP_BIT)
+            tx <= 1'b1; // Stop bit
+        else if (tx_state == START_BIT)
+            tx <= 1'b0; // Start bit
+        else
+            tx <= 1'b1; // Idle state
     end
 
     // Receiver logic
@@ -104,7 +112,7 @@ module uart #(
         if (!nrst) begin
             clk_div2 <= 0;
         end else begin
-            if (clk_div2 == CYCLES_PER_BIT - 1 && rx_state != IDLE) begin
+            if (clk_div2 == CYCLES_PER_BIT - 1 || rx_state == IDLE) begin
                 clk_div2 <= 0;
             end else begin
                 clk_div2 <= clk_div2 + 1;
@@ -118,7 +126,7 @@ module uart #(
             data_recv <= 8'b0;
             rx_bit_cnt <= 0;
             new_rx <= 0;
-        end else if (tick_tx) begin
+        end else begin
             case (rx_state)
                 IDLE: begin
                     new_rx <= 0;
@@ -127,13 +135,13 @@ module uart #(
                     end
                 end
                 START_BIT: begin
-                    if (clk_div2 == CYCLES_PER_BIT/2 - 1) begin
+                    if (clk_div2 == SAMPLE_BIT) begin
                         rx_state <= DATA_BITS;
                         rx_bit_cnt <= 0;
                     end
                 end
                 DATA_BITS: begin
-                    if (clk_div2 == CYCLES_PER_BIT/2 - 1) begin
+                    if (clk_div2 == SAMPLE_BIT) begin
                         data_recv[rx_bit_cnt] <= rx_ff[1];
                         if (rx_bit_cnt == 7) begin
                             rx_state <= STOP_BIT;
@@ -143,7 +151,7 @@ module uart #(
                     end
                 end
                 STOP_BIT: begin
-                    if (clk_div2 == CYCLES_PER_BIT/2 - 1) begin
+                    if (clk_div2 == SAMPLE_BIT) begin
                         rx_state <= IDLE;
                         new_rx <= 1;
                     end

@@ -72,17 +72,18 @@ module tb_uart;
         @ (posedge clk);
         nrst = 1;
 
-        data_send = 8'hA5; // Example data
+        data_send = 8'b10110100;
         ena_tx = 1;
         @ (posedge clk);
 
         // Wait for transmission to complete
         @ (posedge clk iff tx_done);
+        ena_tx = 0;
         @ (posedge clk);
 
         // Add more test cases as needed
 
-        generate_rx(8'h5A); // Example received data
+        generate_rx(8'b10110100); // Example received data
         // Finish simulation
         #1000;
         $finish;
