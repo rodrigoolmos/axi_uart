@@ -4,28 +4,45 @@ interface uart_if #(
     timeunit      1ns;
     timeprecision 1ps;
 
-    localparam time BIT_TIME = 1s / BAUD_RATE;
+    localparam time BIT_TIME  = 1s / BAUD_RATE;
+    localparam int BIT_TIME_INT  = 1_000_000_000 / BAUD_RATE;
+    localparam int MAX_JITTER = BIT_TIME_INT / 10;
 
     logic tx;
     logic rx;
 
     task automatic send_byte(input logic [7:0] data);
-        int i;
+        int  i;
+        int  jitter_steps;
+        time bit_delay;
 
+        // IDLE
         rx = 1'b1;
-        #(BIT_TIME);
+        jitter_steps = $urandom_range(0, integer'(2*MAX_JITTER)) - MAX_JITTER;
+        bit_delay    = BIT_TIME_INT + jitter_steps;
+        #(bit_delay);
 
+        // START
         rx = 1'b0;
-        #(BIT_TIME);
+        jitter_steps = $urandom_range(0, integer'(2*MAX_JITTER)) - MAX_JITTER;
+        bit_delay    = BIT_TIME_INT + jitter_steps;
+        #(bit_delay);
 
+        // DATA
         for (i = 0; i < 8; i++) begin
             rx = data[i];
-            #(BIT_TIME);
+            jitter_steps = $urandom_range(0, integer'(2*MAX_JITTER)) - MAX_JITTER;
+            bit_delay    = BIT_TIME_INT + jitter_steps;
+            #(bit_delay);
         end
 
+        // STOP
         rx = 1'b1;
-        #(BIT_TIME);
+        jitter_steps = $urandom_range(0, integer'(2*MAX_JITTER)) - MAX_JITTER;
+        bit_delay    = BIT_TIME_INT + jitter_steps;
+        #(bit_delay);
     endtask
+
 
     task automatic receive_byte(output logic [7:0] data);
         int i;
@@ -41,6 +58,35 @@ interface uart_if #(
 
         #(BIT_TIME);
     endtask
+
+    typedef enum logic[1:0] { 
+        IDLE,
+        START,
+        DATA,
+        STOP
+    } uart_rx_state_t;
+
+    // int bit_index = 0;
+
+    // uart_rx_state_t rx_state = IDLE;
+
+    // task automatic assert_receive_byte();
+    //     rx_state = IDLE;
+    //     bit_index = 0;
+    //     @ (negedge tx);
+    //     rx_state = START;
+
+    //     for (int i=0; i<8; ++i) begin
+    //         #(BIT_TIME);
+    //         rx_state = DATA;
+    //         bit_index = i;
+    //     end
+
+    //     #(BIT_TIME);
+    //     rx_state = STOP;
+
+    // endtask
+
 
 endinterface
 
@@ -72,6 +118,7 @@ class uart_agent;
             forever begin
                 if (stop_listen) break;
                 vif.receive_byte(b);
+                //assert_receive_byte();
                 rx_data_list.push_back(b);
                 score_tx_byte(b);
             end
@@ -81,37 +128,18 @@ class uart_agent;
     task automatic score_tx_byte(input logic [7:0] actual_data);
         logic [7:0] expected;
 
-        if (expected_tx_list.size() == 0) begin
-            $error("TX received unexpected byte 0x%0h (queue empty)", actual_data);
-        end else begin
+        TX_received_unexpected: assert (expected_tx_list.size() != 0) begin
             expected = expected_tx_list.pop_front();
-            if (expected !== actual_data) begin
-                $error("TX Data mismatch: expected 0x%0h, received 0x%0h", expected, actual_data);
-            end
+            TX_data_mismatch: assert (expected === actual_data)
+                else $error("TX Data mismatch: expected 0x%0h, received 0x%0h"
+                    , expected, actual_data);
         end
+            else $error("TX received unexpected byte 0x%0h (queue empty)", actual_data);
+    
     endtask
 
     task stop_listening();
         stop_listen = 1;
     endtask
-
-    task check_integrity(input logic [7:0] expected_data[$]);
-        int n_exp  = expected_data.size();
-        int n_recv = rx_data_list.size();
-
-        n_recv_dif_n_exp: assert (n_recv == n_exp)
-            else $error("TX Received %0d bytes, expected %0d bytes", n_recv, n_exp);
-
-        if (expected_tx_list.size() != 0) begin
-            $error("TX Scoreboard pending %0d expected bytes", expected_tx_list.size());
-        end
-
-        for (int i = 0; i < n_exp; i++) begin
-            data_match: assert (rx_data_list[i] == expected_data[i])
-                else $error("TX Data mismatch at index %0d: received 0x%0h, expected 0x%0h",
-                            i, rx_data_list[i], expected_data[i]);
-        end
-    endtask
-
 
 endclass

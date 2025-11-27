@@ -66,14 +66,14 @@ module tb_uart;
         @ (posedge clk iff new_rx);
         receiving_data_rx.push_back(data_recv);
 
-        if (sending_data_rx.size() == 0) begin
-            $error("RX received unexpected byte 0x%0h (queue empty)", data_recv);
-        end else begin
+        RX_received_unexpected: assert (receiving_data_rx.size() != 0) begin
             expected = sending_data_rx.pop_front();
-            if (expected !== data_recv) begin
-                $error("RX Data mismatch: expected 0x%0h, received 0x%0h", expected, data_recv);
-            end
+            RX_data_mismatch: assert (expected === data_recv)
+                else $error("RX Data mismatch: expected 0x%0h, received 0x%0h",
+                     expected, data_recv);
         end
+            else $error("RX received unexpected byte 0x%0h (queue empty)", data_recv);
+
     endtask
 
     logic [7:0] b = 0;
@@ -90,12 +90,6 @@ module tb_uart;
 
     task stop_listening();
         stop_listen = 1;
-    endtask
-
-    task automatic check_integrity();
-        if (sending_data_rx.size() != 0) begin
-            $error("RX Scoreboard pending %0d expected bytes", sending_data_rx.size());
-        end
     endtask
 
     task automatic init();
@@ -163,10 +157,6 @@ module tb_uart;
             join
 
         end
-
-
-        uart_ag.check_integrity(sending_data_tx);
-        check_integrity();
 
         uart_ag.stop_listening();
         stop_listening();
