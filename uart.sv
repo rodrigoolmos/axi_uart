@@ -18,7 +18,9 @@ module uart #(
 
     // Calculate the number of clock cycles per bit
     localparam integer CYCLES_PER_BIT = CLK_FREQ / BAUD_RATE;
-    localparam integer SAMPLE_BIT = CYCLES_PER_BIT / 2;
+    localparam integer SAMPLE_TIME = CYCLES_PER_BIT / 2;
+
+    logic sample_rx;
 
     // Transmitter state machine
     typedef enum logic [1:0] {
@@ -143,13 +145,13 @@ module uart #(
                     end
                 end
                 START_BIT: begin
-                    if (clk_div2 == SAMPLE_BIT) begin
+                    if (sample_rx) begin
                         rx_state <= DATA_BITS;
                         rx_bit_cnt <= 0;
                     end
                 end
                 DATA_BITS: begin
-                    if (clk_div2 == SAMPLE_BIT) begin
+                    if (sample_rx) begin
                         data_recv[rx_bit_cnt] <= rx_ff[1];
                         if (rx_bit_cnt == 7) begin
                             rx_state <= STOP_BIT;
@@ -159,7 +161,7 @@ module uart #(
                     end
                 end
                 STOP_BIT: begin
-                    if (clk_div2 == SAMPLE_BIT) begin
+                    if (sample_rx) begin
                         rx_state <= IDLE;
                         new_rx <= rx_ff[1];
                         error_rx <= ~rx_ff[1];
@@ -168,5 +170,8 @@ module uart #(
             endcase
         end
     end
+
+    always_comb
+        sample_rx = (clk_div2 == SAMPLE_TIME);
 
 endmodule
