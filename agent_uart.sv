@@ -11,6 +11,23 @@ interface uart_if #(
     logic tx;
     logic rx;
 
+    // helper signal for property checking
+
+    typedef enum logic[1:0] { 
+        IDLE,
+        START,
+        DATA,
+        STOP
+    } uart_rx_state_t;
+
+    logic internal_clk;
+    int bit_index = 0;
+    uart_rx_state_t rx_state = IDLE;
+    logic ward = 0;
+    time ward_value = BIT_TIME_INT/20;
+    time bit_value = BIT_TIME_INT - BIT_TIME_INT/10;
+
+
     task automatic send_byte(input logic [7:0] data);
         int  i;
         int  jitter_steps;
@@ -43,7 +60,6 @@ interface uart_if #(
         #(bit_delay);
     endtask
 
-
     task automatic receive_byte(output logic [7:0] data);
         int i;
 
@@ -59,34 +75,89 @@ interface uart_if #(
         #(BIT_TIME);
     endtask
 
-    typedef enum logic[1:0] { 
-        IDLE,
-        START,
-        DATA,
-        STOP
-    } uart_rx_state_t;
+    task automatic assert_receive_byte();
+        rx_state = IDLE;
+        bit_index = 0;
+        @ (negedge tx);
+        rx_state = START;
+        #(BIT_TIME);
 
-    // int bit_index = 0;
+        for (int i=0; i<8; ++i) begin
+            rx_state = DATA;
+            bit_index = i;
+            #(BIT_TIME);
+        end
 
-    // uart_rx_state_t rx_state = IDLE;
+        rx_state = STOP;
+        #(9*BIT_TIME/10);
+    endtask
 
-    // task automatic assert_receive_byte();
-    //     rx_state = IDLE;
-    //     bit_index = 0;
-    //     @ (negedge tx);
-    //     rx_state = START;
+    task automatic ward_receive_byte();
 
-    //     for (int i=0; i<8; ++i) begin
-    //         #(BIT_TIME);
-    //         rx_state = DATA;
-    //         bit_index = i;
-    //     end
+        ward = 1;
+        @ (negedge tx);
+        for (int i=0; i<9; ++i) begin
+            ward = 0;
+            #(ward_value);
+            ward = 1;
+            #(bit_value);
+            ward = 0;
+            #(ward_value);
+        end
+        ward = 0;
+        #(ward_value);
+        ward = 1;
+        #(bit_value);
+        ward = 0;
+        #(ward_value/2);
 
-    //     #(BIT_TIME);
-    //     rx_state = STOP;
+    endtask
 
-    // endtask
+    start_bit: assert property (
+        @(posedge internal_clk)
+        (rx_state == START && ward == 1) |-> (tx == 1'b0)
+    ) else $error("Start bit failed: tx != 0");
 
+    data_bit: assert property (
+        @(posedge internal_clk)
+        (rx_state == DATA && ward == 1) |=> $stable(tx)
+    ) else $error("Data bit failed: tx not stable");
+
+    stop_bit: assert property (
+        @(posedge internal_clk)
+        (rx_state == STOP && ward == 1) |-> (tx == 1'b1)
+    ) else $error("Stop bit failed: tx != 1");
+
+    cover_start: cover property (
+        @(posedge internal_clk)
+        rx_state == START && ward && tx == 1'b0
+    );
+
+    idle_line_high: assert property (
+        @(posedge internal_clk)
+        (rx_state == IDLE && ward) |-> (tx == 1'b1)
+    );
+
+
+    cover_data_0: cover property (
+        @(posedge internal_clk)
+        rx_state == DATA && ward && tx == 1'b0
+    );
+
+    cover_data_1: cover property (
+        @(posedge internal_clk)
+        rx_state == DATA && ward && tx == 1'b1
+    );
+
+    cover_stop: cover property (
+        @(posedge internal_clk)
+        rx_state == STOP && ward && tx == 1'b1
+    );
+
+    initial begin
+        internal_clk = 0;
+        forever #5ns internal_clk = ~internal_clk;
+    end
 
 endinterface
 
@@ -117,10 +188,20 @@ class uart_agent;
         fork
             forever begin
                 if (stop_listen) break;
-                vif.receive_byte(b);
-                //assert_receive_byte();
-                rx_data_list.push_back(b);
-                score_tx_byte(b);
+                fork
+                    begin
+                        vif.ward_receive_byte();
+                    end
+                    begin
+                        vif.assert_receive_byte();
+                    end
+                    begin
+                        vif.receive_byte(b);
+                        rx_data_list.push_back(b);
+                        score_tx_byte(b);
+                    end
+                join
+                
             end
         join_none
     endtask
