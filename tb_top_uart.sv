@@ -87,6 +87,7 @@ module tb_top_uart;
     initial begin
         axi_m = new(axi_if);
         uart = new(uart_if);
+        axi_m.reset_if();
 
         // Write to AXI4-Lite
         @(posedge axi_if.nrst);
