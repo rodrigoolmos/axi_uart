@@ -172,6 +172,7 @@ class uart_agent;
 
     function new(virtual uart_if.tb vif);
         this.vif = vif;
+        vif.rx = 1'b1;
     endfunction
 
     function void expect_tx_byte(input logic [7:0] data);
